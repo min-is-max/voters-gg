@@ -123,6 +123,7 @@ async function initFirebaseMode() {
       return;
     }
 
+    const previousTotal = state.currentUserVotes.total;
     const userVotesRef = ref(db, `userVotes/${state.currentUid}`);
     const userVoteResult = await runTransaction(userVotesRef, (current) => {
       const next = sanitizeUserVotes(current);
@@ -136,7 +137,7 @@ async function initFirebaseMode() {
     });
 
     const committedUserVotes = sanitizeUserVotes(userVoteResult.snapshot?.val());
-    if (!userVoteResult.committed || committedUserVotes.total === state.currentUserVotes.total) {
+    if (!userVoteResult.committed || committedUserVotes.total <= previousTotal) {
       setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
       return;
     }
