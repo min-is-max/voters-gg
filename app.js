@@ -108,7 +108,6 @@ async function initFirebaseMode() {
   const auth = getAuth(app);
   const db = getDatabase(app);
   const keys = getCurrentTimeKeys();
-  const todayKey = keys.dayKey;
 
   const authResult = await signInAnonymously(auth);
   state.currentUid = authResult.user.uid;
@@ -136,7 +135,7 @@ async function initFirebaseMode() {
     const previousTotal = state.currentUserVotes.total;
     const userVotesRef = ref(db, `userVotes/${state.currentUid}`);
     const userVoteResult = await runTransaction(userVotesRef, (current) => {
-      const next = sanitizeUserVotes(current, todayKey);
+      const next = sanitizeUserVotes(current, getCurrentTimeKeys().dayKey);
       if (next.total >= MAX_VOTES_PER_USER) {
         return next;
       }
@@ -146,7 +145,7 @@ async function initFirebaseMode() {
       return next;
     });
 
-    const committedUserVotes = sanitizeUserVotes(userVoteResult.snapshot?.val(), todayKey);
+    const committedUserVotes = sanitizeUserVotes(userVoteResult.snapshot?.val(), getCurrentTimeKeys().dayKey);
     if (!userVoteResult.committed || committedUserVotes.total <= previousTotal) {
       setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
       return;
@@ -257,6 +256,49 @@ function initLocalMode() {
   refreshAllVisuals();
 }
 
+async function handleRewardRequest() {
+  const todayKey = getCurrentTimeKeys().dayKey;
+
+  if (config.mode === "firebase" && state.currentUid) {
+    try {
+      const { getDatabase, ref, runTransaction } = await import("https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js");
+      const db = getDatabase();
+      const userVotesRef = ref(db, `userVotes/${state.currentUid}`);
+
+      await runTransaction(userVotesRef, (current) => {
+        const next = sanitizeUserVotes(current, todayKey);
+        const refills = Math.max(0, Number(next.rewardedRefills) || 0);
+        return {
+          messi: 0,
+          ronaldo: 0,
+          total: 0,
+          resetDay: todayKey,
+          rewardedRefills: refills + 1,
+          updatedAt: Date.now(),
+        };
+      });
+
+      setStatus("광고 보상으로 오늘 표 100개가 다시 충전됐습니다.", "live");
+      return;
+    } catch (error) {
+      console.error("Reward refill failed", error);
+      setStatus("표 충전에 실패했습니다. 잠시 후 다시 시도해주세요.", "warn");
+      return;
+    }
+  }
+
+  state.currentUserVotes = {
+    messi: 0,
+    ronaldo: 0,
+    total: 0,
+    resetDay: todayKey,
+    rewardedRefills: Math.max(0, Number(state.currentUserVotes.rewardedRefills) || 0) + 1,
+  };
+  persistLocalState();
+  refreshVoteButtons();
+  setStatus("광고 보상으로 오늘 표 100개가 다시 충전됐습니다.", "local");
+}
+
 function loadLocalJson(key, fallback) {
   const saved = localStorage.getItem(key);
   if (!saved) {
@@ -333,10 +375,6 @@ function refreshVoteButtons() {
   }
 
   setStatus(`로컬 데모 모드 · 내 남은 표 ${remainingVotes}`, "local");
-}
-
-function handleRewardRequest() {
-  setStatus("광고 보상 버튼 자리는 연결해뒀습니다. 실제 100표 충전은 보상형 광고 SDK 연동 후 광고 완료 이벤트에서 처리하면 됩니다.", "warn");
 }
 
 function getCurrentTimeKeys() {
