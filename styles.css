@@ -66,13 +66,6 @@ body::before {
   line-height: 0.95;
 }
 
-.hero-copy {
-  width: min(760px, 100%);
-  margin: 14px auto 0;
-  font-size: 1rem;
-  color: var(--muted);
-}
-
 .battle-layout {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(360px, 540px) minmax(220px, 1fr);
@@ -360,8 +353,7 @@ body::before {
   gap: 10px;
 }
 
-.live-status,
-.sync-note {
+.live-status {
   margin: 0;
   padding: 12px 14px;
   border-radius: 14px;
@@ -380,10 +372,6 @@ body::before {
 
 .live-status[data-mode="local"] {
   color: #d2dbe7;
-}
-
-.sync-note {
-  color: var(--muted);
 }
 
 @keyframes drop {
@@ -426,10 +414,6 @@ body::before {
   .app-shell {
     width: min(100vw - 18px, 100%);
     padding-top: 20px;
-  }
-
-  .hero-copy {
-    font-size: 0.92rem;
   }
 
   .player-panel,

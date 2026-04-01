@@ -1,11 +1,16 @@
 const config = window.VOTERS_CONFIG || { mode: "local" };
+const INITIAL_COUNTS = { messi: 12533, ronaldo: 14021 };
+const MAX_VOTES_PER_USER = 100;
+const LOCAL_COUNTS_KEY = "messi-vs-ronaldo-vote";
+const LOCAL_USER_KEY = "messi-vs-ronaldo-vote-user";
 
 const state = {
-  counts: { messi: 0, ronaldo: 0 },
-  displayState: { messi: 0, ronaldo: 0 },
-  currentUserVote: null,
+  counts: { ...INITIAL_COUNTS },
+  displayState: { ...INITIAL_COUNTS },
+  currentUserVotes: { messi: 0, ronaldo: 0, total: 0 },
   currentUid: null,
   isReadyToVote: false,
+  castVote: null,
 };
 
 let animationFrame = 0;
@@ -27,7 +32,6 @@ const nodes = {
   dropletLayer: document.querySelector("#droplet-layer"),
   voteButtons: document.querySelectorAll(".vote-button"),
   liveStatus: document.querySelector("#live-status"),
-  syncNote: document.querySelector("#sync-note"),
 };
 
 renderImmediate(state.displayState);
@@ -41,14 +45,14 @@ boot();
 
 async function boot() {
   if (config.mode === "firebase" && config.firebase?.projectId) {
-    setStatus("공용 실시간 투표 서버에 연결 중...", "live");
+    setStatus("실시간 투표 서버에 연결 중...", "live");
+
     try {
       await initFirebaseMode();
       return;
     } catch (error) {
       console.error("Firebase mode failed, falling back to local mode", error);
-      setStatus("Firebase 연결에 실패해서 로컬 모드로 전환했습니다.", "warn");
-      nodes.syncNote.textContent = "지금은 이 브라우저 안에서만 투표가 저장됩니다.";
+      setStatus("Firebase 연결 실패, 로컬 모드로 전환했습니다.", "warn");
     }
   }
 
@@ -70,50 +74,77 @@ async function initFirebaseMode() {
   const db = getDatabase(app);
   const voteStateRef = ref(db, "voteState");
 
-  const castVote = async (player) => {
+  state.castVote = async (player) => {
     if (!state.currentUid) {
-      setStatus("사용자 세션을 연결하는 중입니다. 잠시 후 다시 눌러주세요.", "warn");
+      setStatus("익명 세션 연결 중입니다. 잠시 후 다시 시도해주세요.", "warn");
+      return;
+    }
+
+    if (state.currentUserVotes.total >= MAX_VOTES_PER_USER) {
+      setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
       return;
     }
 
     spawnDroplets(player);
-    setStatus("표를 반영하는 중...", "live");
+    setStatus("투표 반영 중...", "live");
 
-    await runTransaction(voteStateRef, (current) => {
-      const next = current || { counts: { messi: 0, ronaldo: 0 }, voters: {} };
-      const counts = {
-        messi: Math.max(0, Number(next.counts?.messi) || 0),
-        ronaldo: Math.max(0, Number(next.counts?.ronaldo) || 0),
-      };
-      const voters = { ...(next.voters || {}) };
-      const previousVote = voters[state.currentUid];
+    const userVotesRef = ref(db, `userVotes/${state.currentUid}`);
 
-      if (previousVote === player) {
+    const userVoteResult = await runTransaction(userVotesRef, (current) => {
+      const next = sanitizeUserVotes(current);
+
+      if (next.total >= MAX_VOTES_PER_USER) {
         return next;
       }
 
-      if (previousVote === "messi" || previousVote === "ronaldo") {
-        counts[previousVote] = Math.max(0, counts[previousVote] - 1);
-      }
+      next[player] += 1;
+      next.total += 1;
+      next.updatedAt = Date.now();
+      return next;
+    });
 
+    if (!userVoteResult.committed) {
+      setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
+      return;
+    }
+
+    const committedUserVotes = sanitizeUserVotes(userVoteResult.snapshot?.val());
+    if (committedUserVotes.total > MAX_VOTES_PER_USER) {
+      setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
+      return;
+    }
+
+    if (committedUserVotes.total === state.currentUserVotes.total) {
+      setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
+      return;
+    }
+
+    await runTransaction(voteStateRef, (current) => {
+      const next = current || createInitialVoteState();
+      const counts = sanitizeCounts(next.counts);
       counts[player] += 1;
-      voters[state.currentUid] = player;
 
       return {
         counts,
-        voters,
         updatedAt: Date.now(),
       };
     });
   };
 
-  state.castVote = castVote;
+  await runTransaction(voteStateRef, (current) => current || createInitialVoteState());
 
   onAuthStateChanged(auth, (user) => {
     if (user) {
       state.currentUid = user.uid;
       state.isReadyToVote = true;
-      setStatus("전 세계 사용자와 실시간 동기화 중", "live");
+
+      const userVotesRef = ref(db, `userVotes/${user.uid}`);
+      onValue(userVotesRef, (snapshot) => {
+        state.currentUserVotes = sanitizeUserVotes(snapshot.val());
+        refreshVoteButtons();
+      });
+
+      setStatus(`실시간 동기화 완료 · 내 남은 표 ${MAX_VOTES_PER_USER}`, "live");
       return;
     }
 
@@ -125,93 +156,146 @@ async function initFirebaseMode() {
   });
 
   onValue(voteStateRef, (snapshot) => {
-    const next = snapshot.val() || {};
-    const counts = sanitizeCounts(next.counts || next);
-    state.currentUserVote = next.voters?.[state.currentUid] || null;
-    state.counts = counts;
-    animateTo(counts);
+    const next = snapshot.val() || createInitialVoteState();
+    state.counts = sanitizeCounts(next.counts || next);
+    animateTo(state.counts);
     refreshVoteButtons();
   });
 }
 
 function initLocalMode() {
-  const STORAGE_KEY = "messi-vs-ronaldo-vote";
   localChannel = "BroadcastChannel" in window ? new BroadcastChannel("messi-vs-ronaldo") : null;
-  state.counts = loadLocalCounts(STORAGE_KEY);
+  state.counts = loadLocalCounts();
   state.displayState = { ...state.counts };
+  state.currentUserVotes = loadLocalUserVotes();
   state.isReadyToVote = true;
+
   state.castVote = (player) => {
-    const next = {
-      ...state.counts,
-      [player]: state.counts[player] + 1,
-    };
-
-    spawnDroplets(player);
-    state.counts = next;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-
-    if (localChannel) {
-      localChannel.postMessage(next);
-    }
-
-    animateTo(next);
-  };
-
-  renderImmediate(state.displayState);
-  setStatus("로컬 데모 모드", "local");
-  nodes.syncNote.textContent = "Firebase를 연결하면 모든 방문자에게 실시간으로 공유됩니다.";
-
-  window.addEventListener("storage", (event) => {
-    if (event.key !== STORAGE_KEY || !event.newValue) {
+    if (state.currentUserVotes.total >= MAX_VOTES_PER_USER) {
+      setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
       return;
     }
 
-    try {
-      const next = JSON.parse(event.newValue);
-      state.counts = sanitizeCounts(next);
-      animateTo(state.counts);
-    } catch (error) {
-      console.error("Failed to parse local vote state", error);
+    spawnDroplets(player);
+
+    state.currentUserVotes[player] += 1;
+    state.currentUserVotes.total += 1;
+    state.counts[player] += 1;
+
+    persistLocalState();
+    animateTo(state.counts);
+    refreshVoteButtons();
+
+    if (localChannel) {
+      localChannel.postMessage({
+        counts: state.counts,
+        userVotes: state.currentUserVotes,
+      });
+    }
+  };
+
+  window.addEventListener("storage", (event) => {
+    if (event.key === LOCAL_COUNTS_KEY && event.newValue) {
+      try {
+        state.counts = sanitizeCounts(JSON.parse(event.newValue));
+        animateTo(state.counts);
+      } catch (error) {
+        console.error("Failed to parse local vote state", error);
+      }
+    }
+
+    if (event.key === LOCAL_USER_KEY && event.newValue) {
+      try {
+        state.currentUserVotes = sanitizeUserVotes(JSON.parse(event.newValue));
+        refreshVoteButtons();
+      } catch (error) {
+        console.error("Failed to parse local user state", error);
+      }
     }
   });
 
   if (localChannel) {
     localChannel.addEventListener("message", (event) => {
-      state.counts = sanitizeCounts(event.data);
-      animateTo(state.counts);
+      if (event.data?.counts) {
+        state.counts = sanitizeCounts(event.data.counts);
+        animateTo(state.counts);
+      }
+
+      if (event.data?.userVotes) {
+        state.currentUserVotes = sanitizeUserVotes(event.data.userVotes);
+        refreshVoteButtons();
+      }
     });
   }
+
+  setStatus(`로컬 데모 모드 · 내 남은 표 ${MAX_VOTES_PER_USER - state.currentUserVotes.total}`, "local");
+  refreshVoteButtons();
 }
 
-function loadLocalCounts(storageKey) {
-  const saved = localStorage.getItem(storageKey);
+function persistLocalState() {
+  localStorage.setItem(LOCAL_COUNTS_KEY, JSON.stringify(state.counts));
+  localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(state.currentUserVotes));
+}
+
+function loadLocalCounts() {
+  const saved = localStorage.getItem(LOCAL_COUNTS_KEY);
 
   if (!saved) {
-    return { messi: 0, ronaldo: 0 };
+    return { ...INITIAL_COUNTS };
   }
 
   try {
     return sanitizeCounts(JSON.parse(saved));
   } catch (error) {
     console.error("Failed to read local vote state", error);
-    return { messi: 0, ronaldo: 0 };
+    return { ...INITIAL_COUNTS };
   }
 }
 
-function handleVote(player) {
-  if (!state.isReadyToVote || typeof state.castVote !== "function") {
-    setStatus("연결이 준비되면 투표할 수 있습니다. 잠시만 기다려주세요.", "warn");
-    return;
+function loadLocalUserVotes() {
+  const saved = localStorage.getItem(LOCAL_USER_KEY);
+
+  if (!saved) {
+    return { messi: 0, ronaldo: 0, total: 0 };
   }
 
-  state.castVote(player);
+  try {
+    return sanitizeUserVotes(JSON.parse(saved));
+  } catch (error) {
+    console.error("Failed to read local user vote state", error);
+    return { messi: 0, ronaldo: 0, total: 0 };
+  }
+}
+
+function createInitialVoteState() {
+  return {
+    counts: { ...INITIAL_COUNTS },
+    updatedAt: Date.now(),
+  };
 }
 
 function sanitizeCounts(value) {
   return {
-    messi: Math.max(0, Number(value?.messi) || 0),
-    ronaldo: Math.max(0, Number(value?.ronaldo) || 0),
+    messi: Math.max(INITIAL_COUNTS.messi, Number(value?.messi) || 0),
+    ronaldo: Math.max(INITIAL_COUNTS.ronaldo, Number(value?.ronaldo) || 0),
   };
+}
+
+function sanitizeUserVotes(value) {
+  const messi = Math.max(0, Number(value?.messi) || 0);
+  const ronaldo = Math.max(0, Number(value?.ronaldo) || 0);
+  const total = Math.max(0, Number(value?.total) || messi + ronaldo);
+
+  return { messi, ronaldo, total };
+}
+
+function handleVote(player) {
+  if (!state.isReadyToVote || typeof state.castVote !== "function") {
+    setStatus("연결 준비 중입니다. 잠시 후 다시 눌러주세요.", "warn");
+    return;
+  }
+
+  state.castVote(player);
 }
 
 function animateTo(target) {
@@ -255,25 +339,38 @@ function renderImmediate(current) {
   nodes.centerRatio.textContent = `${Math.round(messiRatio * 100)} : ${Math.round(ronaldoRatio * 100)}`;
 
   const leftWidth = 424 * messiRatio;
-  const rightWidth = 424 - leftWidth;
   const splitX = 48 + leftWidth;
 
   nodes.messiFill.setAttribute("width", `${leftWidth}`);
   nodes.ronaldoFill.setAttribute("x", `${splitX}`);
-  nodes.ronaldoFill.setAttribute("width", `${Math.max(rightWidth, 0)}`);
+  nodes.ronaldoFill.setAttribute("width", `${Math.max(424 - leftWidth, 0)}`);
 
   updateWave(splitX, messiRatio, waveTick);
   updateBubbles(messiRatio, bubbleTick);
 }
 
 function refreshVoteButtons() {
+  const remainingVotes = Math.max(0, MAX_VOTES_PER_USER - state.currentUserVotes.total);
+
   nodes.voteButtons.forEach((button) => {
-    const isMine = state.currentUserVote === button.dataset.player;
-    button.classList.toggle("vote-button-active", isMine);
-    button.textContent = isMine
-      ? `${button.dataset.player === "messi" ? "메시" : "호날두"}에게 투표함`
-      : `${button.dataset.player === "messi" ? "메시" : "호날두"}에게 투표`;
+    const player = button.dataset.player;
+    const casted = state.currentUserVotes[player];
+    button.textContent = `${player === "messi" ? "메시" : "호날두"}에게 투표 (${casted}/${MAX_VOTES_PER_USER})`;
+    button.disabled = remainingVotes === 0;
+    button.classList.toggle("vote-button-active", casted > 0);
   });
+
+  if (remainingVotes === 0) {
+    setStatus(`이 익명 세션은 ${MAX_VOTES_PER_USER}표를 모두 사용했습니다.`, "warn");
+    return;
+  }
+
+  if (config.mode === "firebase") {
+    setStatus(`실시간 동기화 중 · 내 남은 표 ${remainingVotes}`, "live");
+    return;
+  }
+
+  setStatus(`로컬 데모 모드 · 내 남은 표 ${remainingVotes}`, "local");
 }
 
 function setStatus(message, mode) {
