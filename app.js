@@ -97,12 +97,16 @@ async function initFirebaseMode() {
     import("https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js"),
   ]);
 
-  const { getAuth, onAuthStateChanged, signInAnonymously } = authSdk;
+  const { getAuth, signInAnonymously } = authSdk;
   const { getDatabase, onValue, ref, runTransaction } = dbSdk;
   const app = initializeApp(config.firebase);
   const auth = getAuth(app);
   const db = getDatabase(app);
   const keys = getCurrentTimeKeys();
+
+  const authResult = await signInAnonymously(auth);
+  state.currentUid = authResult.user.uid;
+  state.isReadyToVote = true;
 
   await Promise.all([
     runTransaction(ref(db, "voteState"), (current) => current || createVoteState(INITIAL_COUNTS)),
@@ -155,23 +159,9 @@ async function initFirebaseMode() {
     ]);
   };
 
-  onAuthStateChanged(auth, (user) => {
-    if (user) {
-      state.currentUid = user.uid;
-      state.isReadyToVote = true;
-      onValue(ref(db, `userVotes/${user.uid}`), (snapshot) => {
-        state.currentUserVotes = sanitizeUserVotes(snapshot.val());
-        refreshVoteButtons();
-      });
-      refreshVoteButtons();
-      return;
-    }
-
-    state.isReadyToVote = false;
-    signInAnonymously(auth).catch((error) => {
-      console.error("Anonymous auth failed", error);
-      setStatus("익명 로그인에 실패했습니다. Firebase 설정을 확인해주세요.", "warn");
-    });
+  onValue(ref(db, `userVotes/${state.currentUid}`), (snapshot) => {
+    state.currentUserVotes = sanitizeUserVotes(snapshot.val());
+    refreshVoteButtons();
   });
 
   onValue(ref(db, "aggregates/all"), (snapshot) => {
