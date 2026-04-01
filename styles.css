@@ -157,6 +157,43 @@ body::before {
   gap: 14px;
   margin-bottom: 14px;
 }
+
+.vote-policy {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.vote-policy-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.reward-button {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+  padding: 12px 16px;
+  border-radius: 999px;
+  font-weight: 800;
+  color: #fff6f6;
+  background: linear-gradient(135deg, #ff8a65, #d62839);
+  box-shadow: 0 14px 30px rgba(214, 40, 57, 0.24);
+}
+
+.reward-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .score-block,
 .snapshot-card {
   padding: 16px 18px;
@@ -264,6 +301,7 @@ body::before {
   .range-tabs,
   .scoreboard,
   .snapshot-grid { grid-template-columns: 1fr 1fr; }
+  .vote-policy { flex-direction: column; align-items: stretch; }
   .player-panel,
   .arena-panel { border-radius: 22px; }
   .player-frame,

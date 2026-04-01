@@ -52,6 +52,7 @@ const nodes = {
   allTotalMeta: document.querySelector("#all-total-meta"),
   todayTotalVotes: document.querySelector("#today-total-votes"),
   todayTotalMeta: document.querySelector("#today-total-meta"),
+  rewardButton: document.querySelector("#reward-button"),
 };
 
 nodes.voteButtons.forEach((button) => {
@@ -66,6 +67,10 @@ nodes.rangeTabs.forEach((button) => {
     refreshSnapshots();
     refreshVoteButtons();
   });
+});
+
+nodes.rewardButton.addEventListener("click", () => {
+  handleRewardRequest();
 });
 
 refreshRangeTabs();
@@ -103,6 +108,7 @@ async function initFirebaseMode() {
   const auth = getAuth(app);
   const db = getDatabase(app);
   const keys = getCurrentTimeKeys();
+  const todayKey = keys.dayKey;
 
   const authResult = await signInAnonymously(auth);
   state.currentUid = authResult.user.uid;
@@ -130,7 +136,7 @@ async function initFirebaseMode() {
     const previousTotal = state.currentUserVotes.total;
     const userVotesRef = ref(db, `userVotes/${state.currentUid}`);
     const userVoteResult = await runTransaction(userVotesRef, (current) => {
-      const next = sanitizeUserVotes(current);
+      const next = sanitizeUserVotes(current, todayKey);
       if (next.total >= MAX_VOTES_PER_USER) {
         return next;
       }
@@ -140,7 +146,7 @@ async function initFirebaseMode() {
       return next;
     });
 
-    const committedUserVotes = sanitizeUserVotes(userVoteResult.snapshot?.val());
+    const committedUserVotes = sanitizeUserVotes(userVoteResult.snapshot?.val(), todayKey);
     if (!userVoteResult.committed || committedUserVotes.total <= previousTotal) {
       setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
       return;
@@ -160,7 +166,7 @@ async function initFirebaseMode() {
   };
 
   onValue(ref(db, `userVotes/${state.currentUid}`), (snapshot) => {
-    state.currentUserVotes = sanitizeUserVotes(snapshot.val());
+    state.currentUserVotes = sanitizeUserVotes(snapshot.val(), getCurrentTimeKeys().dayKey);
     refreshVoteButtons();
   });
 
@@ -197,7 +203,7 @@ async function initFirebaseMode() {
 function initLocalMode() {
   localChannel = "BroadcastChannel" in window ? new BroadcastChannel("messi-vs-ronaldo-vote-v2") : null;
   state.aggregates = sanitizeAggregateObject(loadLocalJson(LOCAL_STATE_KEY, state.aggregates));
-  state.currentUserVotes = sanitizeUserVotes(loadLocalJson(LOCAL_USER_KEY, state.currentUserVotes));
+  state.currentUserVotes = sanitizeUserVotes(loadLocalJson(LOCAL_USER_KEY, state.currentUserVotes), getCurrentTimeKeys().dayKey);
   state.isReadyToVote = true;
 
   state.castVote = (player) => {
@@ -230,7 +236,7 @@ function initLocalMode() {
       refreshAllVisuals();
     }
     if (event.key === LOCAL_USER_KEY && event.newValue) {
-      state.currentUserVotes = sanitizeUserVotes(JSON.parse(event.newValue));
+      state.currentUserVotes = sanitizeUserVotes(JSON.parse(event.newValue), getCurrentTimeKeys().dayKey);
       refreshVoteButtons();
     }
   });
@@ -242,7 +248,7 @@ function initLocalMode() {
         refreshAllVisuals();
       }
       if (event.data?.userVotes) {
-        state.currentUserVotes = sanitizeUserVotes(event.data.userVotes);
+        state.currentUserVotes = sanitizeUserVotes(event.data.userVotes, getCurrentTimeKeys().dayKey);
         refreshVoteButtons();
       }
     });
@@ -314,8 +320,10 @@ function refreshVoteButtons() {
     button.classList.toggle("vote-button-active", casted > 0);
   });
 
+  nodes.rewardButton.disabled = false;
+
   if (remainingVotes === 0) {
-    setStatus(`이 익명 세션은 ${MAX_VOTES_PER_USER}표를 모두 사용했습니다.`, "warn");
+    setStatus(`이 익명 세션은 오늘 ${MAX_VOTES_PER_USER}표를 모두 사용했습니다. 광고를 보면 다시 100표를 받을 수 있습니다.`, "warn");
     return;
   }
 
@@ -325,6 +333,10 @@ function refreshVoteButtons() {
   }
 
   setStatus(`로컬 데모 모드 · 내 남은 표 ${remainingVotes}`, "local");
+}
+
+function handleRewardRequest() {
+  setStatus("광고 보상 버튼 자리는 연결해뒀습니다. 실제 100표 충전은 보상형 광고 SDK 연동 후 광고 완료 이벤트에서 처리하면 됩니다.", "warn");
 }
 
 function getCurrentTimeKeys() {
@@ -368,11 +380,17 @@ function sanitizeCounts(value, floorToInitial = false) {
   };
 }
 
-function sanitizeUserVotes(value) {
+function sanitizeUserVotes(value, todayKey = getCurrentTimeKeys().dayKey) {
+  const resetDay = typeof value?.resetDay === "string" ? value.resetDay : todayKey;
+  if (resetDay !== todayKey) {
+    return { messi: 0, ronaldo: 0, total: 0, resetDay: todayKey, rewardedRefills: 0 };
+  }
+
   const messi = Math.max(0, Number(value?.messi) || 0);
   const ronaldo = Math.max(0, Number(value?.ronaldo) || 0);
   const total = Math.max(0, Number(value?.total) || messi + ronaldo);
-  return { messi, ronaldo, total };
+  const rewardedRefills = Math.max(0, Number(value?.rewardedRefills) || 0);
+  return { messi, ronaldo, total, resetDay, rewardedRefills };
 }
 
 function handleVote(player) {
