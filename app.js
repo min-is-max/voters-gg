@@ -1,11 +1,17 @@
-const STORAGE_KEY = "messi-vs-ronaldo-vote";
-const channel = "BroadcastChannel" in window ? new BroadcastChannel("messi-vs-ronaldo") : null;
+const config = window.VOTERS_CONFIG || { mode: "local" };
 
-const counts = loadCounts();
-let displayState = { ...counts };
+const state = {
+  counts: { messi: 0, ronaldo: 0 },
+  displayState: { messi: 0, ronaldo: 0 },
+  currentUserVote: null,
+  currentUid: null,
+  isReadyToVote: false,
+};
+
 let animationFrame = 0;
 let waveTick = 0;
 let bubbleTick = 0;
+let localChannel = null;
 
 const nodes = {
   messiCount: document.querySelector("#messi-count"),
@@ -19,55 +25,186 @@ const nodes = {
   waveHighlight: document.querySelector("#wave-highlight"),
   bubbleLayer: document.querySelector("#bubble-layer"),
   dropletLayer: document.querySelector("#droplet-layer"),
-  resetButton: document.querySelector("#reset-button"),
   voteButtons: document.querySelectorAll(".vote-button"),
+  liveStatus: document.querySelector("#live-status"),
+  syncNote: document.querySelector("#sync-note"),
 };
 
-renderImmediate(displayState);
+renderImmediate(state.displayState);
 startWaveLoop();
 
 nodes.voteButtons.forEach((button) => {
   button.addEventListener("click", () => handleVote(button.dataset.player));
 });
 
-nodes.resetButton.addEventListener("click", () => {
-  const next = { messi: 0, ronaldo: 0 };
-  updateCounts(next, "reset");
-});
+boot();
 
-window.addEventListener("storage", (event) => {
-  if (event.key !== STORAGE_KEY || !event.newValue) {
-    return;
+async function boot() {
+  if (config.mode === "firebase" && config.firebase?.projectId) {
+    setStatus("공용 실시간 투표 서버에 연결 중...", "live");
+    try {
+      await initFirebaseMode();
+      return;
+    } catch (error) {
+      console.error("Firebase mode failed, falling back to local mode", error);
+      setStatus("Firebase 연결에 실패해서 로컬 모드로 전환했습니다.", "warn");
+      nodes.syncNote.textContent = "지금은 이 브라우저 안에서만 투표가 저장됩니다.";
+    }
   }
 
-  try {
-    const next = JSON.parse(event.newValue);
-    syncFromOutside(next);
-  } catch (error) {
-    console.error("Failed to parse synced vote state", error);
-  }
-});
+  initLocalMode();
+}
 
-if (channel) {
-  channel.addEventListener("message", (event) => {
-    syncFromOutside(event.data);
+async function initFirebaseMode() {
+  const [{ initializeApp }, authSdk, dbSdk] = await Promise.all([
+    import("https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js"),
+    import("https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js"),
+    import("https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js"),
+  ]);
+
+  const { getAuth, onAuthStateChanged, signInAnonymously } = authSdk;
+  const { getDatabase, onValue, ref, runTransaction } = dbSdk;
+
+  const app = initializeApp(config.firebase);
+  const auth = getAuth(app);
+  const db = getDatabase(app);
+  const voteStateRef = ref(db, "voteState");
+
+  const castVote = async (player) => {
+    if (!state.currentUid) {
+      setStatus("사용자 세션을 연결하는 중입니다. 잠시 후 다시 눌러주세요.", "warn");
+      return;
+    }
+
+    spawnDroplets(player);
+    setStatus("표를 반영하는 중...", "live");
+
+    await runTransaction(voteStateRef, (current) => {
+      const next = current || { counts: { messi: 0, ronaldo: 0 }, voters: {} };
+      const counts = {
+        messi: Math.max(0, Number(next.counts?.messi) || 0),
+        ronaldo: Math.max(0, Number(next.counts?.ronaldo) || 0),
+      };
+      const voters = { ...(next.voters || {}) };
+      const previousVote = voters[state.currentUid];
+
+      if (previousVote === player) {
+        return next;
+      }
+
+      if (previousVote === "messi" || previousVote === "ronaldo") {
+        counts[previousVote] = Math.max(0, counts[previousVote] - 1);
+      }
+
+      counts[player] += 1;
+      voters[state.currentUid] = player;
+
+      return {
+        counts,
+        voters,
+        updatedAt: Date.now(),
+      };
+    });
+  };
+
+  state.castVote = castVote;
+
+  onAuthStateChanged(auth, (user) => {
+    if (user) {
+      state.currentUid = user.uid;
+      state.isReadyToVote = true;
+      setStatus("전 세계 사용자와 실시간 동기화 중", "live");
+      return;
+    }
+
+    state.isReadyToVote = false;
+    signInAnonymously(auth).catch((error) => {
+      console.error("Anonymous auth failed", error);
+      setStatus("익명 로그인에 실패했습니다. Firebase 설정을 확인해주세요.", "warn");
+    });
+  });
+
+  onValue(voteStateRef, (snapshot) => {
+    const next = snapshot.val() || {};
+    const counts = sanitizeCounts(next.counts || next);
+    state.currentUserVote = next.voters?.[state.currentUid] || null;
+    state.counts = counts;
+    animateTo(counts);
+    refreshVoteButtons();
   });
 }
 
-function loadCounts() {
-  const saved = localStorage.getItem(STORAGE_KEY);
+function initLocalMode() {
+  const STORAGE_KEY = "messi-vs-ronaldo-vote";
+  localChannel = "BroadcastChannel" in window ? new BroadcastChannel("messi-vs-ronaldo") : null;
+  state.counts = loadLocalCounts(STORAGE_KEY);
+  state.displayState = { ...state.counts };
+  state.isReadyToVote = true;
+  state.castVote = (player) => {
+    const next = {
+      ...state.counts,
+      [player]: state.counts[player] + 1,
+    };
+
+    spawnDroplets(player);
+    state.counts = next;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+
+    if (localChannel) {
+      localChannel.postMessage(next);
+    }
+
+    animateTo(next);
+  };
+
+  renderImmediate(state.displayState);
+  setStatus("로컬 데모 모드", "local");
+  nodes.syncNote.textContent = "Firebase를 연결하면 모든 방문자에게 실시간으로 공유됩니다.";
+
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE_KEY || !event.newValue) {
+      return;
+    }
+
+    try {
+      const next = JSON.parse(event.newValue);
+      state.counts = sanitizeCounts(next);
+      animateTo(state.counts);
+    } catch (error) {
+      console.error("Failed to parse local vote state", error);
+    }
+  });
+
+  if (localChannel) {
+    localChannel.addEventListener("message", (event) => {
+      state.counts = sanitizeCounts(event.data);
+      animateTo(state.counts);
+    });
+  }
+}
+
+function loadLocalCounts(storageKey) {
+  const saved = localStorage.getItem(storageKey);
 
   if (!saved) {
     return { messi: 0, ronaldo: 0 };
   }
 
   try {
-    const parsed = JSON.parse(saved);
-    return sanitizeCounts(parsed);
+    return sanitizeCounts(JSON.parse(saved));
   } catch (error) {
-    console.error("Failed to read saved vote state", error);
+    console.error("Failed to read local vote state", error);
     return { messi: 0, ronaldo: 0 };
   }
+}
+
+function handleVote(player) {
+  if (!state.isReadyToVote || typeof state.castVote !== "function") {
+    setStatus("연결이 준비되면 투표할 수 있습니다. 잠시만 기다려주세요.", "warn");
+    return;
+  }
+
+  state.castVote(player);
 }
 
 function sanitizeCounts(value) {
@@ -77,43 +214,9 @@ function sanitizeCounts(value) {
   };
 }
 
-function handleVote(player) {
-  const next = {
-    ...counts,
-    [player]: counts[player] + 1,
-  };
-
-  spawnDroplets(player);
-  updateCounts(next, "vote");
-}
-
-function updateCounts(nextCounts, source) {
-  counts.messi = nextCounts.messi;
-  counts.ronaldo = nextCounts.ronaldo;
-
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(counts));
-
-  if (channel) {
-    channel.postMessage(counts);
-  }
-
-  animateTo(counts);
-
-  if (source === "reset") {
-    clearDroplets();
-  }
-}
-
-function syncFromOutside(nextCounts) {
-  const sanitized = sanitizeCounts(nextCounts);
-  counts.messi = sanitized.messi;
-  counts.ronaldo = sanitized.ronaldo;
-  animateTo(counts);
-}
-
 function animateTo(target) {
   cancelAnimationFrame(animationFrame);
-  const start = { ...displayState };
+  const start = { ...state.displayState };
   const startedAt = performance.now();
   const duration = 900;
 
@@ -121,32 +224,32 @@ function animateTo(target) {
     const progress = Math.min((now - startedAt) / duration, 1);
     const eased = 1 - Math.pow(1 - progress, 3);
 
-    displayState = {
+    state.displayState = {
       messi: start.messi + (target.messi - start.messi) * eased,
       ronaldo: start.ronaldo + (target.ronaldo - start.ronaldo) * eased,
     };
 
-    renderImmediate(displayState);
+    renderImmediate(state.displayState);
 
     if (progress < 1) {
       animationFrame = requestAnimationFrame(frame);
       return;
     }
 
-    displayState = { ...target };
-    renderImmediate(displayState);
+    state.displayState = { ...target };
+    renderImmediate(state.displayState);
   }
 
   animationFrame = requestAnimationFrame(frame);
 }
 
-function renderImmediate(state) {
-  const total = state.messi + state.ronaldo;
-  const messiRatio = total === 0 ? 0.5 : state.messi / total;
+function renderImmediate(current) {
+  const total = current.messi + current.ronaldo;
+  const messiRatio = total === 0 ? 0.5 : current.messi / total;
   const ronaldoRatio = 1 - messiRatio;
 
-  nodes.messiCount.textContent = Math.round(state.messi).toLocaleString("ko-KR");
-  nodes.ronaldoCount.textContent = Math.round(state.ronaldo).toLocaleString("ko-KR");
+  nodes.messiCount.textContent = Math.round(current.messi).toLocaleString("ko-KR");
+  nodes.ronaldoCount.textContent = Math.round(current.ronaldo).toLocaleString("ko-KR");
   nodes.messiPercent.textContent = `${Math.round(messiRatio * 100)}%`;
   nodes.ronaldoPercent.textContent = `${Math.round(ronaldoRatio * 100)}%`;
   nodes.centerRatio.textContent = `${Math.round(messiRatio * 100)} : ${Math.round(ronaldoRatio * 100)}`;
@@ -161,6 +264,21 @@ function renderImmediate(state) {
 
   updateWave(splitX, messiRatio, waveTick);
   updateBubbles(messiRatio, bubbleTick);
+}
+
+function refreshVoteButtons() {
+  nodes.voteButtons.forEach((button) => {
+    const isMine = state.currentUserVote === button.dataset.player;
+    button.classList.toggle("vote-button-active", isMine);
+    button.textContent = isMine
+      ? `${button.dataset.player === "messi" ? "메시" : "호날두"}에게 투표함`
+      : `${button.dataset.player === "messi" ? "메시" : "호날두"}에게 투표`;
+  });
+}
+
+function setStatus(message, mode) {
+  nodes.liveStatus.textContent = message;
+  nodes.liveStatus.dataset.mode = mode;
 }
 
 function updateWave(splitX, messiRatio, tick) {
@@ -223,17 +341,17 @@ function startWaveLoop() {
   function animate() {
     waveTick += 0.018;
     bubbleTick += 0.012;
-    updateWave(48 + 424 * getRatio(displayState), getRatio(displayState), waveTick);
-    updateBubbles(getRatio(displayState), bubbleTick);
+    updateWave(48 + 424 * getRatio(state.displayState), getRatio(state.displayState), waveTick);
+    updateBubbles(getRatio(state.displayState), bubbleTick);
     requestAnimationFrame(animate);
   }
 
   requestAnimationFrame(animate);
 }
 
-function getRatio(state) {
-  const total = state.messi + state.ronaldo;
-  return total === 0 ? 0.5 : state.messi / total;
+function getRatio(current) {
+  const total = current.messi + current.ronaldo;
+  return total === 0 ? 0.5 : current.messi / total;
 }
 
 function spawnDroplets(player) {
@@ -248,8 +366,4 @@ function spawnDroplets(player) {
     nodes.dropletLayer.appendChild(droplet);
     setTimeout(() => droplet.remove(), 1400 + i * 60);
   }
-}
-
-function clearDroplets() {
-  nodes.dropletLayer.innerHTML = "";
 }
