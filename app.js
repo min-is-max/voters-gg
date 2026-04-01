@@ -1,6 +1,7 @@
 const config = window.VOTERS_CONFIG || { mode: "local" };
 const INITIAL_COUNTS = { messi: 12533, ronaldo: 14021 };
 const MAX_VOTES_PER_USER = 100;
+const MAX_REWARD_REFILLS_PER_DAY = 10;
 const TIME_ZONE = "Asia/Seoul";
 const LOCAL_STATE_KEY = "messi-vs-ronaldo-vote-state-v2";
 const LOCAL_USER_KEY = "messi-vs-ronaldo-vote-user-v2";
@@ -258,6 +259,12 @@ function initLocalMode() {
 
 async function handleRewardRequest() {
   const todayKey = getCurrentTimeKeys().dayKey;
+  const currentRefills = Math.max(0, Number(state.currentUserVotes.rewardedRefills) || 0);
+
+  if (currentRefills >= MAX_REWARD_REFILLS_PER_DAY) {
+    setStatus(`광고 충전은 하루 최대 ${MAX_REWARD_REFILLS_PER_DAY}번까지 가능합니다.`, "warn");
+    return;
+  }
 
   if (config.mode === "firebase" && state.currentUid) {
     try {
@@ -273,12 +280,12 @@ async function handleRewardRequest() {
           ronaldo: 0,
           total: 0,
           resetDay: todayKey,
-          rewardedRefills: refills + 1,
+          rewardedRefills: Math.min(MAX_REWARD_REFILLS_PER_DAY, refills + 1),
           updatedAt: Date.now(),
         };
       });
 
-      setStatus("광고 보상으로 오늘 표 100개가 다시 충전됐습니다.", "live");
+      setStatus(`광고 보상으로 오늘 표 100개가 다시 충전됐습니다. 남은 광고 충전 ${Math.max(0, MAX_REWARD_REFILLS_PER_DAY - currentRefills - 1)}회`, "live");
       return;
     } catch (error) {
       console.error("Reward refill failed", error);
@@ -292,11 +299,11 @@ async function handleRewardRequest() {
     ronaldo: 0,
     total: 0,
     resetDay: todayKey,
-    rewardedRefills: Math.max(0, Number(state.currentUserVotes.rewardedRefills) || 0) + 1,
+    rewardedRefills: Math.min(MAX_REWARD_REFILLS_PER_DAY, currentRefills + 1),
   };
   persistLocalState();
   refreshVoteButtons();
-  setStatus("광고 보상으로 오늘 표 100개가 다시 충전됐습니다.", "local");
+  setStatus(`광고 보상으로 오늘 표 100개가 다시 충전됐습니다. 남은 광고 충전 ${Math.max(0, MAX_REWARD_REFILLS_PER_DAY - currentRefills - 1)}회`, "local");
 }
 
 function loadLocalJson(key, fallback) {
@@ -354,6 +361,7 @@ function refreshSnapshots() {
 
 function refreshVoteButtons() {
   const remainingVotes = Math.max(0, MAX_VOTES_PER_USER - state.currentUserVotes.total);
+  const remainingRefills = Math.max(0, MAX_REWARD_REFILLS_PER_DAY - (state.currentUserVotes.rewardedRefills || 0));
   nodes.voteButtons.forEach((button) => {
     const player = button.dataset.player;
     const casted = state.currentUserVotes[player];
@@ -362,9 +370,15 @@ function refreshVoteButtons() {
     button.classList.toggle("vote-button-active", casted > 0);
   });
 
-  nodes.rewardButton.disabled = false;
+  nodes.rewardButton.disabled = remainingRefills === 0;
+  nodes.rewardButton.textContent = `광고 보고 100표 충전 (${remainingRefills}/${MAX_REWARD_REFILLS_PER_DAY})`;
 
   if (remainingVotes === 0) {
+    if (remainingRefills === 0) {
+      setStatus(`오늘 표와 광고 충전을 모두 사용했습니다. 자정(KST)에 다시 초기화됩니다.`, "warn");
+      return;
+    }
+
     setStatus(`이 익명 세션은 오늘 ${MAX_VOTES_PER_USER}표를 모두 사용했습니다. 광고를 보면 다시 100표를 받을 수 있습니다.`, "warn");
     return;
   }
