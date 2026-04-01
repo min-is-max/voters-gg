@@ -1,12 +1,26 @@
 const config = window.VOTERS_CONFIG || { mode: "local" };
 const INITIAL_COUNTS = { messi: 12533, ronaldo: 14021 };
 const MAX_VOTES_PER_USER = 100;
-const LOCAL_COUNTS_KEY = "messi-vs-ronaldo-vote";
-const LOCAL_USER_KEY = "messi-vs-ronaldo-vote-user";
+const TIME_ZONE = "Asia/Seoul";
+const LOCAL_STATE_KEY = "messi-vs-ronaldo-vote-state-v2";
+const LOCAL_USER_KEY = "messi-vs-ronaldo-vote-user-v2";
+
+const RANGE_LABELS = {
+  hour: "시간별 비율",
+  day: "일별 비율",
+  month: "월별 비율",
+  all: "전체 비율",
+};
 
 const state = {
-  counts: { ...INITIAL_COUNTS },
-  displayState: { ...INITIAL_COUNTS },
+  selectedRange: "hour",
+  aggregates: {
+    hour: { messi: 0, ronaldo: 0 },
+    day: { messi: 0, ronaldo: 0 },
+    month: { messi: 0, ronaldo: 0 },
+    all: { ...INITIAL_COUNTS },
+  },
+  displayState: { messi: 0, ronaldo: 0 },
   currentUserVotes: { messi: 0, ronaldo: 0, total: 0 },
   currentUid: null,
   isReadyToVote: false,
@@ -24,6 +38,7 @@ const nodes = {
   messiPercent: document.querySelector("#messi-percent"),
   ronaldoPercent: document.querySelector("#ronaldo-percent"),
   centerRatio: document.querySelector("#center-ratio"),
+  centerLabel: document.querySelector("#center-label"),
   messiFill: document.querySelector("#messi-fill"),
   ronaldoFill: document.querySelector("#ronaldo-fill"),
   waveBoundary: document.querySelector("#wave-boundary"),
@@ -32,15 +47,31 @@ const nodes = {
   dropletLayer: document.querySelector("#droplet-layer"),
   voteButtons: document.querySelectorAll(".vote-button"),
   liveStatus: document.querySelector("#live-status"),
+  rangeTabs: document.querySelectorAll(".range-tab"),
+  allTotalVotes: document.querySelector("#all-total-votes"),
+  allTotalMeta: document.querySelector("#all-total-meta"),
+  todayTotalVotes: document.querySelector("#today-total-votes"),
+  todayTotalMeta: document.querySelector("#today-total-meta"),
 };
-
-renderImmediate(state.displayState);
-startWaveLoop();
 
 nodes.voteButtons.forEach((button) => {
   button.addEventListener("click", () => handleVote(button.dataset.player));
 });
 
+nodes.rangeTabs.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.selectedRange = button.dataset.range;
+    refreshRangeTabs();
+    animateTo(getSelectedCounts());
+    refreshSnapshots();
+    refreshVoteButtons();
+  });
+});
+
+refreshRangeTabs();
+renderImmediate(getSelectedCounts());
+refreshSnapshots();
+startWaveLoop();
 boot();
 
 async function boot() {
@@ -68,11 +99,18 @@ async function initFirebaseMode() {
 
   const { getAuth, onAuthStateChanged, signInAnonymously } = authSdk;
   const { getDatabase, onValue, ref, runTransaction } = dbSdk;
-
   const app = initializeApp(config.firebase);
   const auth = getAuth(app);
   const db = getDatabase(app);
-  const voteStateRef = ref(db, "voteState");
+  const keys = getCurrentTimeKeys();
+
+  await Promise.all([
+    runTransaction(ref(db, "voteState"), (current) => current || createVoteState(INITIAL_COUNTS)),
+    runTransaction(ref(db, "aggregates/all"), (current) => current || createCountRecord(INITIAL_COUNTS, true)),
+    runTransaction(ref(db, `aggregates/day/${keys.dayKey}`), (current) => current || createCountRecord({ messi: 0, ronaldo: 0 })),
+    runTransaction(ref(db, `aggregates/month/${keys.monthKey}`), (current) => current || createCountRecord({ messi: 0, ronaldo: 0 })),
+    runTransaction(ref(db, `aggregates/hour/${keys.hourKey}`), (current) => current || createCountRecord({ messi: 0, ronaldo: 0 })),
+  ]);
 
   state.castVote = async (player) => {
     if (!state.currentUid) {
@@ -85,66 +123,46 @@ async function initFirebaseMode() {
       return;
     }
 
-    spawnDroplets(player);
-    setStatus("투표 반영 중...", "live");
-
     const userVotesRef = ref(db, `userVotes/${state.currentUid}`);
-
     const userVoteResult = await runTransaction(userVotesRef, (current) => {
       const next = sanitizeUserVotes(current);
-
       if (next.total >= MAX_VOTES_PER_USER) {
         return next;
       }
-
       next[player] += 1;
       next.total += 1;
       next.updatedAt = Date.now();
       return next;
     });
 
-    if (!userVoteResult.committed) {
-      setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
-      return;
-    }
-
     const committedUserVotes = sanitizeUserVotes(userVoteResult.snapshot?.val());
-    if (committedUserVotes.total > MAX_VOTES_PER_USER) {
+    if (!userVoteResult.committed || committedUserVotes.total === state.currentUserVotes.total) {
       setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
       return;
     }
 
-    if (committedUserVotes.total === state.currentUserVotes.total) {
-      setStatus(`익명 사용자당 최대 ${MAX_VOTES_PER_USER}표까지 가능합니다.`, "warn");
-      return;
-    }
+    spawnDroplets(player);
+    setStatus("투표 반영 중...", "live");
 
-    await runTransaction(voteStateRef, (current) => {
-      const next = current || createInitialVoteState();
-      const counts = sanitizeCounts(next.counts);
-      counts[player] += 1;
-
-      return {
-        counts,
-        updatedAt: Date.now(),
-      };
-    });
+    const currentKeys = getCurrentTimeKeys();
+    await Promise.all([
+      runTransaction(ref(db, "voteState"), (current) => bumpCountRecord(current, player, true)),
+      runTransaction(ref(db, "aggregates/all"), (current) => bumpCountRecord(current, player, true)),
+      runTransaction(ref(db, `aggregates/day/${currentKeys.dayKey}`), (current) => bumpCountRecord(current, player, false)),
+      runTransaction(ref(db, `aggregates/month/${currentKeys.monthKey}`), (current) => bumpCountRecord(current, player, false)),
+      runTransaction(ref(db, `aggregates/hour/${currentKeys.hourKey}`), (current) => bumpCountRecord(current, player, false)),
+    ]);
   };
-
-  await runTransaction(voteStateRef, (current) => current || createInitialVoteState());
 
   onAuthStateChanged(auth, (user) => {
     if (user) {
       state.currentUid = user.uid;
       state.isReadyToVote = true;
-
-      const userVotesRef = ref(db, `userVotes/${user.uid}`);
-      onValue(userVotesRef, (snapshot) => {
+      onValue(ref(db, `userVotes/${user.uid}`), (snapshot) => {
         state.currentUserVotes = sanitizeUserVotes(snapshot.val());
         refreshVoteButtons();
       });
-
-      setStatus(`실시간 동기화 완료 · 내 남은 표 ${MAX_VOTES_PER_USER}`, "live");
+      refreshVoteButtons();
       return;
     }
 
@@ -155,19 +173,40 @@ async function initFirebaseMode() {
     });
   });
 
-  onValue(voteStateRef, (snapshot) => {
-    const next = snapshot.val() || createInitialVoteState();
-    state.counts = sanitizeCounts(next.counts || next);
-    animateTo(state.counts);
-    refreshVoteButtons();
+  onValue(ref(db, "aggregates/all"), (snapshot) => {
+    state.aggregates.all = sanitizeCounts(snapshot.val()?.counts || snapshot.val(), true);
+    refreshAllVisuals();
+  });
+
+  onValue(ref(db, "voteState"), (snapshot) => {
+    const legacyCounts = sanitizeCounts(snapshot.val()?.counts || snapshot.val(), true);
+    state.aggregates.all = {
+      messi: Math.max(state.aggregates.all.messi, legacyCounts.messi),
+      ronaldo: Math.max(state.aggregates.all.ronaldo, legacyCounts.ronaldo),
+    };
+    refreshAllVisuals();
+  });
+
+  onValue(ref(db, `aggregates/day/${keys.dayKey}`), (snapshot) => {
+    state.aggregates.day = sanitizeCounts(snapshot.val()?.counts || snapshot.val(), false);
+    refreshAllVisuals();
+  });
+
+  onValue(ref(db, `aggregates/month/${keys.monthKey}`), (snapshot) => {
+    state.aggregates.month = sanitizeCounts(snapshot.val()?.counts || snapshot.val(), false);
+    refreshAllVisuals();
+  });
+
+  onValue(ref(db, `aggregates/hour/${keys.hourKey}`), (snapshot) => {
+    state.aggregates.hour = sanitizeCounts(snapshot.val()?.counts || snapshot.val(), false);
+    refreshAllVisuals();
   });
 }
 
 function initLocalMode() {
-  localChannel = "BroadcastChannel" in window ? new BroadcastChannel("messi-vs-ronaldo") : null;
-  state.counts = loadLocalCounts();
-  state.displayState = { ...state.counts };
-  state.currentUserVotes = loadLocalUserVotes();
+  localChannel = "BroadcastChannel" in window ? new BroadcastChannel("messi-vs-ronaldo-vote-v2") : null;
+  state.aggregates = sanitizeAggregateObject(loadLocalJson(LOCAL_STATE_KEY, state.aggregates));
+  state.currentUserVotes = sanitizeUserVotes(loadLocalJson(LOCAL_USER_KEY, state.currentUserVotes));
   state.isReadyToVote = true;
 
   state.castVote = (player) => {
@@ -177,50 +216,40 @@ function initLocalMode() {
     }
 
     spawnDroplets(player);
-
     state.currentUserVotes[player] += 1;
     state.currentUserVotes.total += 1;
-    state.counts[player] += 1;
-
+    state.aggregates.hour[player] += 1;
+    state.aggregates.day[player] += 1;
+    state.aggregates.month[player] += 1;
+    state.aggregates.all[player] += 1;
     persistLocalState();
-    animateTo(state.counts);
-    refreshVoteButtons();
+    refreshAllVisuals();
 
     if (localChannel) {
       localChannel.postMessage({
-        counts: state.counts,
+        aggregates: state.aggregates,
         userVotes: state.currentUserVotes,
       });
     }
   };
 
   window.addEventListener("storage", (event) => {
-    if (event.key === LOCAL_COUNTS_KEY && event.newValue) {
-      try {
-        state.counts = sanitizeCounts(JSON.parse(event.newValue));
-        animateTo(state.counts);
-      } catch (error) {
-        console.error("Failed to parse local vote state", error);
-      }
+    if (event.key === LOCAL_STATE_KEY && event.newValue) {
+      state.aggregates = sanitizeAggregateObject(JSON.parse(event.newValue));
+      refreshAllVisuals();
     }
-
     if (event.key === LOCAL_USER_KEY && event.newValue) {
-      try {
-        state.currentUserVotes = sanitizeUserVotes(JSON.parse(event.newValue));
-        refreshVoteButtons();
-      } catch (error) {
-        console.error("Failed to parse local user state", error);
-      }
+      state.currentUserVotes = sanitizeUserVotes(JSON.parse(event.newValue));
+      refreshVoteButtons();
     }
   });
 
   if (localChannel) {
     localChannel.addEventListener("message", (event) => {
-      if (event.data?.counts) {
-        state.counts = sanitizeCounts(event.data.counts);
-        animateTo(state.counts);
+      if (event.data?.aggregates) {
+        state.aggregates = sanitizeAggregateObject(event.data.aggregates);
+        refreshAllVisuals();
       }
-
       if (event.data?.userVotes) {
         state.currentUserVotes = sanitizeUserVotes(event.data.userVotes);
         refreshVoteButtons();
@@ -228,130 +257,64 @@ function initLocalMode() {
     });
   }
 
-  setStatus(`로컬 데모 모드 · 내 남은 표 ${MAX_VOTES_PER_USER - state.currentUserVotes.total}`, "local");
-  refreshVoteButtons();
+  refreshAllVisuals();
+}
+
+function loadLocalJson(key, fallback) {
+  const saved = localStorage.getItem(key);
+  if (!saved) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(saved);
+  } catch (error) {
+    console.error("Failed to parse local JSON", error);
+    return fallback;
+  }
 }
 
 function persistLocalState() {
-  localStorage.setItem(LOCAL_COUNTS_KEY, JSON.stringify(state.counts));
+  localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(state.aggregates));
   localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(state.currentUserVotes));
 }
 
-function loadLocalCounts() {
-  const saved = localStorage.getItem(LOCAL_COUNTS_KEY);
-
-  if (!saved) {
-    return { ...INITIAL_COUNTS };
-  }
-
-  try {
-    return sanitizeCounts(JSON.parse(saved));
-  } catch (error) {
-    console.error("Failed to read local vote state", error);
-    return { ...INITIAL_COUNTS };
-  }
-}
-
-function loadLocalUserVotes() {
-  const saved = localStorage.getItem(LOCAL_USER_KEY);
-
-  if (!saved) {
-    return { messi: 0, ronaldo: 0, total: 0 };
-  }
-
-  try {
-    return sanitizeUserVotes(JSON.parse(saved));
-  } catch (error) {
-    console.error("Failed to read local user vote state", error);
-    return { messi: 0, ronaldo: 0, total: 0 };
-  }
-}
-
-function createInitialVoteState() {
+function sanitizeAggregateObject(value) {
   return {
-    counts: { ...INITIAL_COUNTS },
-    updatedAt: Date.now(),
+    hour: sanitizeCounts(value?.hour, false),
+    day: sanitizeCounts(value?.day, false),
+    month: sanitizeCounts(value?.month, false),
+    all: sanitizeCounts(value?.all, true),
   };
 }
 
-function sanitizeCounts(value) {
-  return {
-    messi: Math.max(INITIAL_COUNTS.messi, Number(value?.messi) || 0),
-    ronaldo: Math.max(INITIAL_COUNTS.ronaldo, Number(value?.ronaldo) || 0),
-  };
+function refreshAllVisuals() {
+  animateTo(getSelectedCounts());
+  refreshSnapshots();
+  refreshVoteButtons();
 }
 
-function sanitizeUserVotes(value) {
-  const messi = Math.max(0, Number(value?.messi) || 0);
-  const ronaldo = Math.max(0, Number(value?.ronaldo) || 0);
-  const total = Math.max(0, Number(value?.total) || messi + ronaldo);
-
-  return { messi, ronaldo, total };
+function getSelectedCounts() {
+  return state.aggregates[state.selectedRange] || state.aggregates.hour;
 }
 
-function handleVote(player) {
-  if (!state.isReadyToVote || typeof state.castVote !== "function") {
-    setStatus("연결 준비 중입니다. 잠시 후 다시 눌러주세요.", "warn");
-    return;
-  }
-
-  state.castVote(player);
+function refreshRangeTabs() {
+  nodes.rangeTabs.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.range === state.selectedRange);
+  });
+  nodes.centerLabel.textContent = RANGE_LABELS[state.selectedRange];
 }
 
-function animateTo(target) {
-  cancelAnimationFrame(animationFrame);
-  const start = { ...state.displayState };
-  const startedAt = performance.now();
-  const duration = 900;
-
-  function frame(now) {
-    const progress = Math.min((now - startedAt) / duration, 1);
-    const eased = 1 - Math.pow(1 - progress, 3);
-
-    state.displayState = {
-      messi: start.messi + (target.messi - start.messi) * eased,
-      ronaldo: start.ronaldo + (target.ronaldo - start.ronaldo) * eased,
-    };
-
-    renderImmediate(state.displayState);
-
-    if (progress < 1) {
-      animationFrame = requestAnimationFrame(frame);
-      return;
-    }
-
-    state.displayState = { ...target };
-    renderImmediate(state.displayState);
-  }
-
-  animationFrame = requestAnimationFrame(frame);
-}
-
-function renderImmediate(current) {
-  const total = current.messi + current.ronaldo;
-  const messiRatio = total === 0 ? 0.5 : current.messi / total;
-  const ronaldoRatio = 1 - messiRatio;
-
-  nodes.messiCount.textContent = Math.round(current.messi).toLocaleString("ko-KR");
-  nodes.ronaldoCount.textContent = Math.round(current.ronaldo).toLocaleString("ko-KR");
-  nodes.messiPercent.textContent = `${Math.round(messiRatio * 100)}%`;
-  nodes.ronaldoPercent.textContent = `${Math.round(ronaldoRatio * 100)}%`;
-  nodes.centerRatio.textContent = `${Math.round(messiRatio * 100)} : ${Math.round(ronaldoRatio * 100)}`;
-
-  const leftWidth = 424 * messiRatio;
-  const splitX = 48 + leftWidth;
-
-  nodes.messiFill.setAttribute("width", `${leftWidth}`);
-  nodes.ronaldoFill.setAttribute("x", `${splitX}`);
-  nodes.ronaldoFill.setAttribute("width", `${Math.max(424 - leftWidth, 0)}`);
-
-  updateWave(splitX, messiRatio, waveTick);
-  updateBubbles(messiRatio, bubbleTick);
+function refreshSnapshots() {
+  const allCounts = state.aggregates.all;
+  const todayCounts = state.aggregates.day;
+  nodes.allTotalVotes.textContent = formatNumber(allCounts.messi + allCounts.ronaldo);
+  nodes.allTotalMeta.textContent = `Messi ${formatNumber(allCounts.messi)} · Ronaldo ${formatNumber(allCounts.ronaldo)}`;
+  nodes.todayTotalVotes.textContent = formatNumber(todayCounts.messi + todayCounts.ronaldo);
+  nodes.todayTotalMeta.textContent = `Messi ${formatNumber(todayCounts.messi)} · Ronaldo ${formatNumber(todayCounts.ronaldo)}`;
 }
 
 function refreshVoteButtons() {
   const remainingVotes = Math.max(0, MAX_VOTES_PER_USER - state.currentUserVotes.total);
-
   nodes.voteButtons.forEach((button) => {
     const player = button.dataset.player;
     const casted = state.currentUserVotes[player];
@@ -366,11 +329,115 @@ function refreshVoteButtons() {
   }
 
   if (config.mode === "firebase") {
-    setStatus(`실시간 동기화 중 · 내 남은 표 ${remainingVotes}`, "live");
+    setStatus(`${RANGE_LABELS[state.selectedRange]} · 내 남은 표 ${remainingVotes}`, "live");
     return;
   }
 
   setStatus(`로컬 데모 모드 · 내 남은 표 ${remainingVotes}`, "local");
+}
+
+function getCurrentTimeKeys() {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(new Date()).map((part) => [part.type, part.value]));
+  return {
+    hourKey: `${parts.year}-${parts.month}-${parts.day}-${parts.hour}`,
+    dayKey: `${parts.year}-${parts.month}-${parts.day}`,
+    monthKey: `${parts.year}-${parts.month}`,
+  };
+}
+
+function createVoteState(counts) {
+  return { counts: sanitizeCounts(counts, true), updatedAt: Date.now() };
+}
+
+function createCountRecord(counts, floorToInitial = false) {
+  return { counts: sanitizeCounts(counts, floorToInitial), updatedAt: Date.now() };
+}
+
+function bumpCountRecord(current, player, floorToInitial) {
+  const next = current || createCountRecord({ messi: 0, ronaldo: 0 }, floorToInitial);
+  const counts = sanitizeCounts(next.counts || next, floorToInitial);
+  counts[player] += 1;
+  return { counts, updatedAt: Date.now() };
+}
+
+function sanitizeCounts(value, floorToInitial = false) {
+  const floorMessi = floorToInitial ? INITIAL_COUNTS.messi : 0;
+  const floorRonaldo = floorToInitial ? INITIAL_COUNTS.ronaldo : 0;
+  return {
+    messi: Math.max(floorMessi, Number(value?.messi) || 0),
+    ronaldo: Math.max(floorRonaldo, Number(value?.ronaldo) || 0),
+  };
+}
+
+function sanitizeUserVotes(value) {
+  const messi = Math.max(0, Number(value?.messi) || 0);
+  const ronaldo = Math.max(0, Number(value?.ronaldo) || 0);
+  const total = Math.max(0, Number(value?.total) || messi + ronaldo);
+  return { messi, ronaldo, total };
+}
+
+function handleVote(player) {
+  if (!state.isReadyToVote || typeof state.castVote !== "function") {
+    setStatus("연결 준비 중입니다. 잠시 후 다시 눌러주세요.", "warn");
+    return;
+  }
+  state.castVote(player);
+}
+
+function animateTo(target) {
+  cancelAnimationFrame(animationFrame);
+  const start = { ...state.displayState };
+  const startedAt = performance.now();
+  const duration = 900;
+
+  function frame(now) {
+    const progress = Math.min((now - startedAt) / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    state.displayState = {
+      messi: start.messi + (target.messi - start.messi) * eased,
+      ronaldo: start.ronaldo + (target.ronaldo - start.ronaldo) * eased,
+    };
+    renderImmediate(state.displayState);
+    if (progress < 1) {
+      animationFrame = requestAnimationFrame(frame);
+      return;
+    }
+    state.displayState = { ...target };
+    renderImmediate(state.displayState);
+  }
+
+  animationFrame = requestAnimationFrame(frame);
+}
+
+function renderImmediate(current) {
+  const total = current.messi + current.ronaldo;
+  const messiRatio = total === 0 ? 0.5 : current.messi / total;
+  const ronaldoRatio = 1 - messiRatio;
+  nodes.messiCount.textContent = formatNumber(current.messi);
+  nodes.ronaldoCount.textContent = formatNumber(current.ronaldo);
+  nodes.messiPercent.textContent = `${Math.round(messiRatio * 100)}%`;
+  nodes.ronaldoPercent.textContent = `${Math.round(ronaldoRatio * 100)}%`;
+  nodes.centerRatio.textContent = `${Math.round(messiRatio * 100)} : ${Math.round(ronaldoRatio * 100)}`;
+
+  const leftWidth = 424 * messiRatio;
+  const splitX = 48 + leftWidth;
+  nodes.messiFill.setAttribute("width", `${leftWidth}`);
+  nodes.ronaldoFill.setAttribute("x", `${splitX}`);
+  nodes.ronaldoFill.setAttribute("width", `${Math.max(424 - leftWidth, 0)}`);
+  updateWave(splitX, messiRatio, waveTick);
+  updateBubbles(messiRatio, bubbleTick);
+}
+
+function formatNumber(value) {
+  return Math.round(value).toLocaleString("ko-KR");
 }
 
 function setStatus(message, mode) {
@@ -390,12 +457,10 @@ function updateWave(splitX, messiRatio, tick) {
     const y = top + (i / segments) * (bottom - top);
     const sway = Math.sin(tick * 1.8 + i * 0.9) * amplitude;
     const x = splitX + sway;
-
     if (i === 0) {
       path += `L ${x} ${y} `;
       continue;
     }
-
     const prevY = top + ((i - 1) / segments) * (bottom - top);
     const midY = (prevY + y) / 2;
     path += `Q ${splitX + sway} ${midY}, ${x} ${y} `;
@@ -427,7 +492,7 @@ function updateBubbles(messiRatio, tick) {
     const y = 560 - ((tick * 90 + i * 43) % 460);
     const size = 6 + ((i * 3) % 10);
     markup += `<circle class="bubble" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${size}" fill="${
-      side === "left" ? "rgba(194, 241, 255, 0.34)" : "rgba(255, 236, 165, 0.3)"
+      side === "left" ? "rgba(194, 241, 255, 0.34)" : "rgba(255, 189, 189, 0.3)"
     }"></circle>`;
   }
 
@@ -438,8 +503,9 @@ function startWaveLoop() {
   function animate() {
     waveTick += 0.018;
     bubbleTick += 0.012;
-    updateWave(48 + 424 * getRatio(state.displayState), getRatio(state.displayState), waveTick);
-    updateBubbles(getRatio(state.displayState), bubbleTick);
+    const ratio = getRatio(state.displayState);
+    updateWave(48 + 424 * ratio, ratio, waveTick);
+    updateBubbles(ratio, bubbleTick);
     requestAnimationFrame(animate);
   }
 
@@ -453,7 +519,6 @@ function getRatio(current) {
 
 function spawnDroplets(player) {
   const count = 6;
-
   for (let i = 0; i < count; i += 1) {
     const droplet = document.createElement("span");
     droplet.className = `droplet ${player === "messi" ? "droplet-left" : "droplet-right"}`;

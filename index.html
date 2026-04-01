@@ -22,22 +22,24 @@
       <main class="battle-layout">
         <section class="player-panel player-panel-left">
           <div class="player-frame">
-            <img
-              src="./assets/messi.jpg"
-              alt="리오넬 메시"
-            />
+            <img src="./assets/messi.jpg" alt="리오넬 메시" />
           </div>
           <div class="player-meta">
             <p class="player-label">LEFT SIDE</p>
             <h2>MESSI</h2>
-            <p class="player-tag">Blue tide</p>
+            <p class="player-tag">Argentina • Forward • Inter Miami</p>
           </div>
-          <button class="vote-button vote-button-left" data-player="messi">
-            메시에게 투표
-          </button>
+          <button class="vote-button vote-button-left" data-player="messi">메시에게 투표</button>
         </section>
 
         <section class="arena-panel">
+          <div class="range-tabs" role="tablist" aria-label="집계 기준 선택">
+            <button class="range-tab is-active" data-range="hour" type="button">시간별</button>
+            <button class="range-tab" data-range="day" type="button">일별</button>
+            <button class="range-tab" data-range="month" type="button">월별</button>
+            <button class="range-tab" data-range="all" type="button">전체 득표수</button>
+          </div>
+
           <div class="scoreboard">
             <div class="score-block score-block-left">
               <span class="score-name">Messi</span>
@@ -49,6 +51,19 @@
               <strong id="ronaldo-count">0</strong>
               <span class="score-percent" id="ronaldo-percent">50%</span>
             </div>
+          </div>
+
+          <div class="snapshot-grid">
+            <article class="snapshot-card">
+              <span class="snapshot-label">전체 투표수</span>
+              <strong id="all-total-votes">0</strong>
+              <span class="snapshot-meta" id="all-total-meta">Messi 0 · Ronaldo 0</span>
+            </article>
+            <article class="snapshot-card">
+              <span class="snapshot-label">오늘 투표수</span>
+              <strong id="today-total-votes">0</strong>
+              <span class="snapshot-meta" id="today-total-meta">Messi 0 · Ronaldo 0</span>
+            </article>
           </div>
 
           <div class="liquid-stage">
@@ -65,8 +80,8 @@
                   <stop offset="100%" stop-color="#125bce" />
                 </linearGradient>
                 <linearGradient id="ronaldoGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stop-color="#ffd75a" />
-                  <stop offset="100%" stop-color="#ff6b00" />
+                  <stop offset="0%" stop-color="#ff7a7a" />
+                  <stop offset="100%" stop-color="#c1121f" />
                 </linearGradient>
                 <filter id="glassGlow" x="-20%" y="-20%" width="140%" height="140%">
                   <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#07111f" flood-opacity="0.45" />
@@ -89,7 +104,7 @@
               <rect class="arena-outline" x="30" y="28" width="460" height="584" rx="56"></rect>
             </svg>
             <div class="center-readout">
-              <span>실시간 비율</span>
+              <span id="center-label">시간별 비율</span>
               <strong id="center-ratio">50 : 50</strong>
             </div>
           </div>
@@ -101,19 +116,14 @@
 
         <section class="player-panel player-panel-right">
           <div class="player-frame">
-            <img
-              src="./assets/ronaldo.jpg"
-              alt="크리스티아누 호날두"
-            />
+            <img src="./assets/ronaldo.jpg" alt="크리스티아누 호날두" />
           </div>
           <div class="player-meta">
             <p class="player-label">RIGHT SIDE</p>
             <h2>RONALDO</h2>
-            <p class="player-tag">Golden surge</p>
+            <p class="player-tag">Portugal • Forward • Al Nassr</p>
           </div>
-          <button class="vote-button vote-button-right" data-player="ronaldo">
-            호날두에게 투표
-          </button>
+          <button class="vote-button vote-button-right" data-player="ronaldo">호날두에게 투표</button>
         </section>
       </main>
     </div>
