@@ -1,0 +1,444 @@
+:root {
+  --bg-top: #08111f;
+  --bg-bottom: #132743;
+  --panel: rgba(8, 18, 35, 0.58);
+  --panel-stroke: rgba(255, 255, 255, 0.14);
+  --text: #f6fbff;
+  --muted: rgba(246, 251, 255, 0.72);
+  --messi-1: #4cc9ff;
+  --messi-2: #125bce;
+  --ronaldo-1: #ffd75a;
+  --ronaldo-2: #ff6b00;
+  --glass: rgba(255, 255, 255, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Noto Sans KR", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 50% 15%, rgba(255, 255, 255, 0.16), transparent 30%),
+    radial-gradient(circle at 20% 30%, rgba(76, 201, 255, 0.14), transparent 34%),
+    radial-gradient(circle at 80% 30%, rgba(255, 184, 76, 0.16), transparent 34%),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65), transparent 85%);
+}
+
+.app-shell {
+  width: min(1380px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 36px 0 48px;
+}
+
+.hero {
+  text-align: center;
+  margin-bottom: 26px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: var(--muted);
+  letter-spacing: 0.34em;
+  font-size: 0.8rem;
+}
+
+.hero h1 {
+  margin: 0;
+  font-family: "Anton", sans-serif;
+  font-size: clamp(3.2rem, 8vw, 5.8rem);
+  letter-spacing: 0.04em;
+  line-height: 0.95;
+}
+
+.hero-copy {
+  width: min(760px, 100%);
+  margin: 14px auto 0;
+  font-size: 1rem;
+  color: var(--muted);
+}
+
+.battle-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(360px, 540px) minmax(220px, 1fr);
+  gap: 22px;
+  align-items: stretch;
+}
+
+.player-panel,
+.arena-panel {
+  position: relative;
+  border: 1px solid var(--panel-stroke);
+  border-radius: 28px;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.player-panel {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.player-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.player-panel-left::before {
+  background: linear-gradient(180deg, rgba(76, 201, 255, 0.22), transparent 48%);
+}
+
+.player-panel-right::before {
+  background: linear-gradient(180deg, rgba(255, 183, 77, 0.22), transparent 48%);
+}
+
+.player-frame {
+  position: relative;
+  min-height: 420px;
+  border-radius: 22px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.player-frame::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 44%;
+  background: linear-gradient(180deg, transparent, rgba(5, 10, 18, 0.8));
+}
+
+.player-frame img {
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  object-fit: cover;
+  object-position: center top;
+  display: block;
+  transform: scale(1.03);
+}
+
+.player-meta {
+  position: relative;
+  padding: 18px 4px 14px;
+}
+
+.player-label {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.28em;
+  color: var(--muted);
+}
+
+.player-meta h2 {
+  margin: 10px 0 6px;
+  font-family: "Anton", sans-serif;
+  font-size: clamp(2.4rem, 4vw, 4rem);
+  letter-spacing: 0.05em;
+}
+
+.player-tag {
+  margin: 0;
+  color: var(--muted);
+}
+
+.vote-button,
+.reset-button {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.vote-button {
+  position: relative;
+  margin-top: auto;
+  padding: 16px 18px;
+  border-radius: 18px;
+  font-weight: 800;
+  color: #06101d;
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.vote-button:hover,
+.vote-button:focus-visible {
+  transform: translateY(-2px);
+  filter: brightness(1.05);
+}
+
+.vote-button-left {
+  background: linear-gradient(135deg, var(--messi-1), #8bdfff);
+  box-shadow: 0 18px 38px rgba(27, 120, 213, 0.32);
+}
+
+.vote-button-right {
+  background: linear-gradient(135deg, #ffe07a, var(--ronaldo-2));
+  box-shadow: 0 18px 38px rgba(255, 107, 0, 0.28);
+}
+
+.arena-panel {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.scoreboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.score-block {
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.score-name,
+.score-percent {
+  display: block;
+}
+
+.score-name {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.score-block strong {
+  display: block;
+  margin: 6px 0;
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+}
+
+.score-percent {
+  font-weight: 800;
+}
+
+.score-block-left .score-percent {
+  color: #8bdfff;
+}
+
+.score-block-right .score-percent {
+  color: #ffd468;
+}
+
+.liquid-stage {
+  position: relative;
+  flex: 1;
+  min-height: 640px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.liquid-svg {
+  width: min(100%, 520px);
+  height: auto;
+  display: block;
+}
+
+.arena-glass {
+  fill: rgba(255, 255, 255, 0.08);
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 2;
+}
+
+.arena-outline {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.3);
+  stroke-width: 2;
+}
+
+.wave-boundary {
+  mix-blend-mode: screen;
+}
+
+.wave-highlight {
+  stroke: rgba(255, 255, 255, 0.65);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.bubble {
+  opacity: 0.26;
+}
+
+.droplet-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.droplet {
+  position: absolute;
+  top: 0;
+  width: 18px;
+  height: 24px;
+  border-radius: 50% 50% 62% 62%;
+  transform: translate(-50%, -32px) rotate(8deg);
+  animation: drop 980ms cubic-bezier(0.18, 0.8, 0.26, 1) forwards;
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.28);
+}
+
+.droplet::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  top: -4px;
+  left: 4px;
+  transform: rotate(45deg);
+  background: inherit;
+  border-radius: 2px;
+}
+
+.droplet-left {
+  background: linear-gradient(180deg, #9fe7ff, var(--messi-2));
+}
+
+.droplet-right {
+  background: linear-gradient(180deg, #ffeaa1, var(--ronaldo-2));
+}
+
+.center-readout {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  width: min(82%, 320px);
+  text-align: center;
+  padding: 14px 18px;
+  border-radius: 999px;
+  background: rgba(5, 12, 22, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.center-readout span {
+  display: block;
+  font-size: 0.8rem;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+}
+
+.center-readout strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.6rem;
+}
+
+.status-bar {
+  margin-top: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reset-button {
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.sync-note {
+  margin: 0;
+  text-align: right;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+@keyframes drop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -48px) scale(0.7) rotate(8deg);
+  }
+  15% {
+    opacity: 1;
+  }
+  74% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 360px) scale(1.2) rotate(0deg);
+  }
+}
+
+@media (max-width: 1100px) {
+  .battle-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .player-panel {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+
+  .arena-panel {
+    order: -1;
+  }
+
+  .status-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sync-note {
+    text-align: center;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    width: min(100vw - 18px, 100%);
+    padding-top: 20px;
+  }
+
+  .hero-copy {
+    font-size: 0.92rem;
+  }
+
+  .player-panel,
+  .arena-panel {
+    border-radius: 22px;
+  }
+
+  .player-frame,
+  .player-frame img {
+    min-height: 320px;
+  }
+
+  .liquid-stage {
+    min-height: 500px;
+  }
+
+  .center-readout {
+    bottom: 26px;
+  }
+}
